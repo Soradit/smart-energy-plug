@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Energy Plug</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.0/mqtt.min.js"></script>
+<!-- sql.js = SQLite ใน browser -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f5f5f3;--surface:#fff;--surface2:#f1efe8;
+  --text:#1a1a18;--text2:#73726c;--border:rgba(0,0,0,.12);
+  --teal:#1D9E75;--red:#E24B4A;--amber:#BA7517;--blue:#378ADD;
+  --r:10px;--rl:14px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#1c1c1a;--surface:#282825;--surface2:#323230;
+  --text:#f0ede6;--text2:#888780;--border:rgba(255,255,255,.1);
+}}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;padding:20px 14px}
+.wrap{max-width:1100px;margin:0 auto}
+.hdr{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+.hdr h1{font-size:19px;font-weight:500}
+.hdr p{font-size:12px;color:var(--text2);margin-top:2px}
+#clock{font-size:13px;color:var(--text2);white-space:nowrap}
+.bar{display:flex;align-items:center;gap:8px;background:var(--surface);border:.5px solid var(--border);
+  border-radius:var(--r);padding:10px 14px;margin-bottom:14px;flex-wrap:wrap}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--red);flex-shrink:0}
+.dot.on{background:var(--teal);animation:pu 2s infinite}
+@keyframes pu{0%,100%{opacity:1}50%{opacity:.3}}
+.bar-right{display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap}
+.bar-right label{font-size:12px;color:var(--text2)}
+.bar-right input{font-size:12px;padding:4px 8px;border-radius:6px;border:.5px solid var(--border);
+  background:var(--surface2);color:var(--text);outline:none}
+.btn{font-size:12px;padding:4px 12px;border-radius:6px;border:.5px solid var(--border);
+  background:var(--surface2);color:var(--text);cursor:pointer}
+.btn:hover{opacity:.8}
+.btn.pri{background:var(--teal);color:#fff;border-color:transparent}
+.btn.red{background:var(--red);color:#fff;border-color:transparent}
+.rate-bar{display:flex;align-items:center;gap:10px;background:var(--surface2);
+  border-radius:var(--r);padding:8px 14px;margin-bottom:18px;flex-wrap:wrap}
+.rate-bar label{font-size:12px;color:var(--text2)}
+.rate-bar input[type=range]{flex:1;min-width:80px;max-width:180px}
+.sec{font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--text2);margin:18px 0 8px}
+/* ── device cards ── */
+.dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.dc{background:var(--surface);border:.5px solid var(--border);border-radius:var(--rl);padding:14px}
+.dc-hdr{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.dc-ico{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.dc-name{font-size:14px;font-weight:500}
+.dc-sub{font-size:10px;color:var(--text2)}
+.dc-dot{width:7px;height:7px;border-radius:50%;background:var(--red);margin-left:auto;flex-shrink:0}
+.dc-dot.on{background:var(--teal);animation:pu 2s infinite}
+/* realtime metrics — อัปเดตตลอด */
+.rt-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px}
+.rt{background:var(--surface2);border-radius:7px;padding:8px 10px}
+.rt-lbl{font-size:9px;color:var(--text2);margin-bottom:2px;text-transform:uppercase;letter-spacing:.04em}
+.rt-val{font-size:17px;font-weight:500;line-height:1}
+.rt-unit{font-size:10px;color:var(--text2);margin-left:1px}
+/* cost metrics — อัปเดตตาม interval */
+.cost-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.cc{background:var(--surface2);border-radius:7px;padding:8px 10px}
+.cc-lbl{font-size:9px;color:var(--text2);margin-bottom:2px;text-transform:uppercase;letter-spacing:.04em}
+.cc-val{font-size:14px;font-weight:500}
+.badge{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:500}
+.bg{background:#EAF3DE;color:#3B6D11}.ba{background:#FAEEDA;color:#854F0B}.br{background:#FCEBEB;color:#A32D2D}
+@media(prefers-color-scheme:dark){
+  .bg{background:#173404;color:#97C459}.ba{background:#412402;color:#FAC775}.br{background:#501313;color:#F09595}
+}
+.minichart{height:70px;margin-top:10px}
+/* summary */
+.sgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.sc{background:var(--surface2);border-radius:var(--r);padding:12px 14px}
+.sc-lbl{font-size:11px;color:var(--text2);margin-bottom:4px}
+.sc-val{font-size:20px;font-weight:500}
+.sc-unit{font-size:12px;color:var(--text2);margin-left:2px}
+/* sqlite panel */
+.card{background:var(--surface);border:.5px solid var(--border);border-radius:var(--rl);padding:14px}
+.db-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.db-stat{font-size:11px;color:var(--text2)}
+.db-stat b{color:var(--text)}
+.tab-wrap{overflow-x:auto;max-height:220px;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:11px}
+th{text-align:left;padding:6px 8px;color:var(--text2);font-weight:500;
+  border-bottom:.5px solid var(--border);position:sticky;top:0;background:var(--surface)}
+td{padding:6px 8px;border-bottom:.5px solid var(--border);font-family:'Courier New',monospace}
+tr:last-child td{border-bottom:none}
+/* tabs */
+.tabs{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
+.tab{font-size:11px;padding:3px 10px;border-radius:5px;border:.5px solid var(--border);
+  background:var(--surface2);cursor:pointer;color:var(--text2)}
+.tab.active{background:var(--teal);color:#fff;border-color:transparent}
+.log{background:var(--surface2);border-radius:var(--r);padding:10px 12px;
+  font-family:'Courier New',monospace;font-size:10px;color:var(--text2);
+  height:80px;overflow-y:auto;line-height:1.6;margin-top:10px}
+.le.ok{color:var(--teal)}.le.er{color:var(--red)}.le.db{color:var(--amber)}
+.footer{text-align:center;font-size:11px;color:var(--text2);margin-top:28px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="hdr">
+  <div>
+    <h1><i class="ti ti-bolt" style="color:var(--teal);margin-right:6px;vertical-align:-2px"></i>Smart Energy Plug</h1>
+    <p>ESP32 + PZEM-004T — ตู้เย็น / แอร์ / คอมพิวเตอร์</p>
+  </div>
+  <span id="clock">--:--:--</span>
+</div>
+
+<!-- MQTT bar -->
+<div class="bar">
+  <span class="dot" id="dot"></span>
+  <span id="cst" style="font-size:12px;color:var(--text2)">ยังไม่ได้เชื่อมต่อ</span>
+  <div class="bar-right">
+    <label>Broker</label>
+    <input id="broker" value="broker.emqx.io" style="width:160px">
+    <button class="btn pri" onclick="doConnect()"><i class="ti ti-plug-connected"></i> เชื่อมต่อ</button>
+    <button class="btn" onclick="doDisconnect()">ตัด</button>
+  </div>
+</div>
+
+<!-- Rate -->
+<div class="rate-bar">
+  <i class="ti ti-currency-baht" style="color:var(--teal)"></i>
+  <label>อัตราค่าไฟ (฿/kWh)</label>
+  <input type="range" min="2" max="8" step="0.1" value="4.2" oninput="setRate(+this.value)">
+  <b id="rateVal" style="font-size:13px">4.20 ฿/kWh</b>
+</div>
+
+<!-- Summary -->
+<p class="sec">ภาพรวมรวมทุกอุปกรณ์</p>
+<div class="sgrid">
+  <div class="sc"><div class="sc-lbl">⚡ กำลังรวม (realtime)</div>
+    <div class="sc-val" id="sW">--<span class="sc-unit">W</span></div></div>
+  <div class="sc"><div class="sc-lbl">🔋 พลังงานรวม (realtime)</div>
+    <div class="sc-val" id="sE">--<span class="sc-unit">kWh</span></div></div>
+  <div class="sc"><div class="sc-lbl">📅 ค่าไฟ/วัน (รวม)</div>
+    <div class="sc-val" id="sD">--<span class="sc-unit">฿</span></div>
+    <button class="btn" style="margin-top:5px;font-size:10px;padding:2px 8px" onclick="refreshCost()">
+      <i class="ti ti-refresh" style="font-size:10px"></i> รีเฟรช</button></div>
+  <div class="sc"><div class="sc-lbl">🗓 ค่าไฟ/เดือน (ประมาณ)</div>
+    <div class="sc-val" id="sM">--<span class="sc-unit">฿</span></div></div>
+</div>
+
+<!-- Device Cards -->
+<p class="sec">แยกต่ออุปกรณ์ (realtime)</p>
+<div class="dgrid" id="dgrid"></div>
+
+<!-- SQLite DB Panel -->
+<p class="sec"><i class="ti ti-database" style="font-size:12px;vertical-align:-1px"></i> ฐานข้อมูล SQLite (เก็บในหน่วยความจำ — export ได้)</p>
+<div class="card">
+  <div class="db-top">
+    <div class="db-stat">สถานะ: <b id="dbSt">กำลังโหลด...</b></div>
+    <div class="db-stat">Rows: <b id="dbN">0</b></div>
+    <div class="db-stat">บันทึกล่าสุด: <b id="dbLast">--</b></div>
+    <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn" onclick="qRefresh()"><i class="ti ti-refresh" style="font-size:11px"></i> รีโหลด</button>
+      <button class="btn" onclick="exportSQL()"><i class="ti ti-download" style="font-size:11px"></i> Export CSV</button>
+      <button class="btn red" onclick="clearSQL()"><i class="ti ti-trash" style="font-size:11px"></i> ล้าง</button>
+    </div>
+  </div>
+  <!-- tab แยกตาราง -->
+  <div class="tabs">
+    <span class="tab active" onclick="showTab('all',this)">ทั้งหมด</span>
+    <span class="tab" onclick="showTab('fridge',this)">ตู้เย็น</span>
+    <span class="tab" onclick="showTab('ac',this)">แอร์</span>
+    <span class="tab" onclick="showTab('computer',this)">คอมพิวเตอร์</span>
+    <span class="tab" onclick="showTab('daily',this)">สรุปรายวัน</span>
+  </div>
+  <div class="tab-wrap"><table>
+    <thead id="dbHead"></thead>
+    <tbody id="dbBody"><tr><td colspan="10" style="text-align:center;padding:14px;color:var(--text2)">ยังไม่มีข้อมูล</td></tr></tbody>
+  </table></div>
+</div>
+
+<p class="sec">Activity Log</p>
+<div class="log" id="logBox"><div>รอการเชื่อมต่อ MQTT...</div></div>
+<div class="footer">Smart Energy Plug · ESP32 + PZEM-004T ×3 · SQLite</div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════
+//  CONFIG — topic ตรงกับ ESP32
+// ════════════════════════════════════════════════
+const DEVS = [
+  {key:'fridge',   topic:'pzem/esp32/fridge',   name:'ตู้เย็น',      icon:'🧊', color:'#378ADD'},
+  {key:'ac',       topic:'pzem/esp32/ac',        name:'แอร์',         icon:'❄️', color:'#1D9E75'},
+  {key:'computer', topic:'pzem/esp32/computer',  name:'คอมพิวเตอร์', icon:'💻', color:'#BA7517'},
+];
+
+// ════════════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════════════
+let rate = 4.2;
+let mqttClient = null;
+// ข้อมูล realtime (อัปเดตทุกครั้งที่รับ MQTT)
+const rt = {};
+// ค่าเฉลี่ยสำหรับคำนวณค่าไฟรายวัน (เก็บ avg watt)
+const avg = {};
+DEVS.forEach(d => {
+  rt[d.key]  = {v:0,a:0,w:0,e:0,pf:0,hz:0,valid:false};
+  avg[d.key] = {sum:0,cnt:0};
+});
+
+// ค่าไฟ/วัน และ /เดือน — คำนวณเฉพาะตอนกด refresh หรือตอนเปิด
+const cost = {day:{}, month:{}};  // cost.day[key], cost.month[key]
+DEVS.forEach(d => { cost.day[d.key]=null; cost.month[d.key]=null; });
+
+const charts = {};
+const wBuf = {};  // wBuf[key] = [{t,w}]
+DEVS.forEach(d => { wBuf[d.key] = []; });
+
+// ════════════════════════════════════════════════
+//  BUILD UI CARDS
+// ════════════════════════════════════════════════
+function buildCards() {
+  const g = document.getElementById('dgrid');
+  g.innerHTML = DEVS.map(d => `
+  <div class="dc">
+    <div class="dc-hdr">
+      <div class="dc-ico" style="background:${d.color}22">${d.icon}</div>
+      <div><div class="dc-name">${d.name}</div>
+           <div class="dc-sub">topic: ${d.topic}</div></div>
+      <span class="dc-dot" id="dot-${d.key}"></span>
+    </div>
+    <!-- REALTIME — อัปเดตทุกครั้งที่ได้ค่าใหม่ -->
+    <div class="rt-grid">
+      <div class="rt"><div class="rt-lbl">แรงดัน</div>
+        <div class="rt-val" id="v-${d.key}">--<span class="rt-unit">V</span></div></div>
+      <div class="rt"><div class="rt-lbl">กระแส</div>
+        <div class="rt-val" id="a-${d.key}">--<span class="rt-unit">A</span></div></div>
+      <div class="rt"><div class="rt-lbl">กำลังไฟ</div>
+        <div class="rt-val" id="w-${d.key}">--<span class="rt-unit">W</span></div></div>
+    </div>
+    <!-- COST — อัปเดตเฉพาะตอน refresh -->
+    <div class="cost-row">
+      <div class="cc"><div class="cc-lbl">kWh สะสม</div>
+        <div class="cc-val" id="e-${d.key}">--</div></div>
+      <div class="cc"><div class="cc-lbl">฿/วัน</div>
+        <div class="cc-val" id="cd-${d.key}">--</div></div>
+      <div class="cc"><div class="cc-lbl">ระดับ</div>
+        <div id="lv-${d.key}">--</div></div>
+    </div>
+    <div class="minichart"><canvas id="c-${d.key}"></canvas></div>
+  </div>`).join('');
+
+  DEVS.forEach(d => {
+    charts[d.key] = new Chart(document.getElementById('c-'+d.key), {
+      type:'line',
+      data:{labels:[],datasets:[{data:[],borderColor:d.color,
+        backgroundColor:d.color+'1a',fill:true,tension:.4,pointRadius:0,borderWidth:1.5}]},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:false}},
+        scales:{x:{display:false},y:{display:false,min:0}},
+        animation:false}
+    });
+  });
+}
+
+// ════════════════════════════════════════════════
+//  MQTT MESSAGE → UI
+// ════════════════════════════════════════════════
+function onMessage(topic, payload) {
+  const cfg = DEVS.find(d => d.topic === topic);
+  if (!cfg) return;
+  let d;
+  try { d = JSON.parse(payload.toString()); } catch { return; }
+
+  const key = cfg.key;
+  const s = rt[key];
+  s.v = parseFloat(d.voltage);
+  s.a = parseFloat(d.current);
+  s.w = parseFloat(d.power);
+  s.e = parseFloat(d.energy_kwh);
+  s.valid = true;
+
+  // ─── Realtime metrics — อัปเดตทันที ────────────
+  document.getElementById('v-'+key).innerHTML = s.v.toFixed(1)+'<span class="rt-unit">V</span>';
+  document.getElementById('a-'+key).innerHTML = s.a.toFixed(3)+'<span class="rt-unit">A</span>';
+  document.getElementById('w-'+key).innerHTML = s.w.toFixed(1)+'<span class="rt-unit">W</span>';
+  document.getElementById('dot-'+key).className = 'dc-dot on';
+
+  // ─── สะสม avg สำหรับคำนวณ cost/day ─────────────
+  avg[key].sum += s.w;
+  avg[key].cnt++;
+
+  // ─── kWh (อัปเดต แต่ไม่กระพริบเพราะนิ่ง) ──────
+  document.getElementById('e-'+key).textContent = s.e.toFixed(5);
+
+  // ─── Level badge ─────────────────────────────────
+  const lv = d.level || 'LOW';
+  const lel = document.getElementById('lv-'+key);
+  lel.innerHTML = lv==='HIGH' ? '<span class="badge br">⚡ HIGH</span>'
+    : lv==='MEDIUM' ? '<span class="badge ba">〜 MED</span>'
+    : '<span class="badge bg">✓ LOW</span>';
+
+  // ─── Mini chart ──────────────────────────────────
+  const t = new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const buf = wBuf[key];
+  buf.push(s.w);
+  if (buf.length > 40) buf.shift();
+  const ch = charts[key];
+  ch.data.labels = buf.map((_,i) => i===buf.length-1 ? t : '');
+  ch.data.datasets[0].data = [...buf];
+  ch.update('none');
+
+  // ─── Summary realtime ────────────────────────────
+  updateSummaryRT();
+
+  // ─── Save to SQLite ──────────────────────────────
+  sqlInsert(key, cfg.name, d);
+  log('['+cfg.name+'] '+s.w.toFixed(1)+'W '+s.a.toFixed(3)+'A', 'ok');
+}
+
+// ════════════════════════════════════════════════
+//  SUMMARY — แยก realtime กับ cost
+// ════════════════════════════════════════════════
+function updateSummaryRT() {
+  let tw = 0, te = 0;
+  DEVS.forEach(d => { if(rt[d.key].valid){ tw += rt[d.key].w; te += rt[d.key].e; } });
+  document.getElementById('sW').innerHTML = tw.toFixed(0)+'<span class="sc-unit">W</span>';
+  document.getElementById('sE').innerHTML = te.toFixed(4)+'<span class="sc-unit">kWh</span>';
+}
+
+// คำนวณ cost/day จาก avgW ตอนนี้ — เรียกเมื่อกด refresh หรือตอน init
+function refreshCost() {
+  let totalDay = 0;
+  DEVS.forEach(d => {
+    const avgW = avg[d.key].cnt > 0 ? avg[d.key].sum / avg[d.key].cnt : rt[d.key].w;
+    const day  = (avgW * 24 / 1000) * rate;
+    cost.day[d.key] = day;
+    cost.month[d.key] = day * 30;
+    totalDay += day;
+    // อัปเดต card
+    document.getElementById('cd-'+d.key).textContent = day.toFixed(2)+' ฿';
+  });
+  document.getElementById('sD').innerHTML = totalDay.toFixed(2)+'<span class="sc-unit">฿</span>';
+  document.getElementById('sM').innerHTML = (totalDay*30).toFixed(0)+'<span class="sc-unit">฿</span>';
+  log('รีเฟรชค่าไฟ/วัน รวม '+totalDay.toFixed(2)+' ฿', 'db');
+}
+
+function setRate(v) {
+  rate = v;
+  document.getElementById('rateVal').textContent = v.toFixed(2)+' ฿/kWh';
+  refreshCost();
+}
+
+// ════════════════════════════════════════════════
+//  SQLite (sql.js)  — เก็บใน memory เหมือน SQLite จริง
+// ════════════════════════════════════════════════
+let SQL = null, sqlDB = null;
+const SAVE_KEY = 'pzem_sqlite_b64';  // localStorage backup
+
+async function initSQL() {
+  try {
+    SQL = await initSqlJs({
+      locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${f}`
+    });
+
+    // โหลดจาก localStorage ถ้ามี (ทำให้ข้อมูลไม่หายเมื่อ refresh หน้า)
+    const saved = localStorage.getItem(SAVE_KEY);
+    if (saved) {
+      const arr = Uint8Array.from(atob(saved), c => c.charCodeAt(0));
+      sqlDB = new SQL.Database(arr);
+      log('โหลด SQLite จาก localStorage สำเร็จ', 'db');
+    } else {
+      sqlDB = new SQL.Database();
+    }
+
+    // สร้างตารางถ้ายังไม่มี
+    sqlDB.run(`CREATE TABLE IF NOT EXISTS readings (
+      id      INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts      INTEGER NOT NULL,
+      date    TEXT,
+      device  TEXT,
+      voltage REAL, current REAL, power REAL,
+      energy  REAL, pf REAL, frequency REAL,
+      cost_today REAL, cost_month REAL, level TEXT
+    );`);
+    sqlDB.run(`CREATE TABLE IF NOT EXISTS daily_summary (
+      id      INTEGER PRIMARY KEY AUTOINCREMENT,
+      date    TEXT,
+      device  TEXT,
+      kwh     REAL,
+      cost    REAL,
+      peak_w  REAL,
+      samples INTEGER,
+      UNIQUE(date, device)
+    );`);
+
+    document.getElementById('dbSt').textContent = 'พร้อม (SQLite) ✓';
+    document.getElementById('dbSt').style.color = 'var(--teal)';
+    updateRowCount();
+    qRefresh();
+    log('SQLite พร้อมใช้งาน', 'db');
+  } catch(e) {
+    document.getElementById('dbSt').textContent = 'Error: '+e.message;
+    document.getElementById('dbSt').style.color = 'var(--red)';
+  }
+}
+
+// INSERT INTO readings
+function sqlInsert(key, name, d) {
+  if (!sqlDB) return;
+  try {
+    sqlDB.run(`INSERT INTO readings
+      (ts,date,device,voltage,current,power,energy,pf,frequency,cost_today,cost_month,level)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [Date.now(), d.date||'', name,
+       +d.voltage, +d.current, +d.power,
+       +d.energy_kwh, +d.pf, +d.frequency,
+       +d.cost_today, +d.cost_month, d.level||'']);
+
+    // UPSERT daily_summary
+    sqlDB.run(`INSERT INTO daily_summary (date,device,kwh,cost,peak_w,samples)
+      VALUES (?,?,?,?,?,1)
+      ON CONFLICT(date,device) DO UPDATE SET
+        kwh=excluded.kwh, cost=excluded.cost,
+        peak_w=MAX(peak_w,excluded.peak_w),
+        samples=samples+1`,
+      [d.date||'', name, +d.energy_kwh, +d.cost_today, +d.power]);
+
+    // บันทึกลง localStorage ทุก 10 วิ (debounce)
+    scheduleSave();
+    updateRowCount();
+    document.getElementById('dbLast').textContent = new Date().toLocaleTimeString('th-TH');
+  } catch(e) { log('SQL error: '+e.message, 'er'); }
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    if (!sqlDB) return;
+    const arr = sqlDB.export();
+    const b64 = btoa(String.fromCharCode(...arr));
+    try { localStorage.setItem(SAVE_KEY, b64); } catch {}
+  }, 10000);
+}
+
+function updateRowCount() {
+  if (!sqlDB) return;
+  try {
+    const r = sqlDB.exec('SELECT COUNT(*) FROM readings');
+    document.getElementById('dbN').textContent = r[0]?.values[0][0] || 0;
+  } catch {}
+}
+
+// ── Query & Display ──────────────────────────────────────
+let curTab = 'all';
+function showTab(tab, el) {
+  curTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  qRefresh();
+}
+
+function qRefresh() {
+  if (!sqlDB) return;
+  try {
+    let sql, cols;
+    if (curTab === 'daily') {
+      sql  = `SELECT date,device,ROUND(kwh,4) kwh,ROUND(cost,2) cost,ROUND(peak_w,1) peak_w,samples
+              FROM daily_summary ORDER BY date DESC,device LIMIT 100`;
+      cols = ['วันที่','อุปกรณ์','kWh','฿','Peak W','ครั้ง'];
+    } else {
+      const where = curTab==='all' ? '' : `WHERE device='${curTab==='fridge'?'fridge':curTab==='ac'?'แอร์':curTab==='computer'?'คอมพิวเตอร์':curTab}'`;
+      // map key → name
+      const nameMap = {fridge:'ตู้เย็น', ac:'แอร์', computer:'คอมพิวเตอร์'};
+      const nameFilter = nameMap[curTab] || '';
+      const w2 = curTab==='all' ? '' : `WHERE device='${nameFilter}'`;
+      sql  = `SELECT id,datetime(ts/1000,'unixepoch','localtime') ts,device,
+                     voltage,current,power,energy,cost_today,level
+              FROM readings ${w2} ORDER BY id DESC LIMIT 80`;
+      cols = ['#','เวลา','อุปกรณ์','V','A','W','kWh','฿/วัน','Level'];
+    }
+    const res = sqlDB.exec(sql);
+    const thead = document.getElementById('dbHead');
+    const tbody = document.getElementById('dbBody');
+    if (!res.length) {
+      thead.innerHTML = ''; tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:12px;color:var(--text2)">ยังไม่มีข้อมูล</td></tr>';
+      return;
+    }
+    thead.innerHTML = '<tr>'+cols.map(c=>`<th>${c}</th>`).join('')+'</tr>';
+    tbody.innerHTML = res[0].values.map(row =>
+      '<tr>'+row.map(v=>`<td>${v??''}</td>`).join('')+'</tr>'
+    ).join('');
+  } catch(e) { log('Query error: '+e.message,'er'); }
+}
+
+function exportSQL() {
+  if (!sqlDB) return;
+  try {
+    const res = sqlDB.exec('SELECT * FROM readings ORDER BY id');
+    if (!res.length) { alert('ไม่มีข้อมูล'); return; }
+    const hdr = res[0].columns.join(',')+'\n';
+    const rows = res[0].values.map(r => r.join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([hdr+rows],{type:'text/csv'}));
+    a.download = 'pzem_'+new Date().toISOString().slice(0,10)+'.csv';
+    a.click();
+    log('Export CSV สำเร็จ', 'db');
+  } catch(e) { log('Export error: '+e.message,'er'); }
+}
+
+function clearSQL() {
+  if (!sqlDB || !confirm('ล้างข้อมูลทั้งหมด?')) return;
+  sqlDB.run('DELETE FROM readings');
+  sqlDB.run('DELETE FROM daily_summary');
+  localStorage.removeItem(SAVE_KEY);
+  qRefresh(); updateRowCount();
+  log('ล้าง SQLite แล้ว', 'db');
+}
+
+// ════════════════════════════════════════════════
+//  MQTT
+// ════════════════════════════════════════════════
+function setOnline(v) {
+  document.getElementById('dot').className = v ? 'dot on' : 'dot';
+  const el = document.getElementById('cst');
+  el.textContent = v ? 'เชื่อมต่อแล้ว — รับข้อมูล realtime' : 'ยังไม่ได้เชื่อมต่อ';
+  el.style.color = v ? 'var(--teal)' : 'var(--text2)';
+}
+
+function doConnect() {
+  if (mqttClient) mqttClient.end(true);
+  const b = document.getElementById('broker').value.trim();
+  log('กำลังเชื่อมต่อ '+b+'...');
+  mqttClient = mqtt.connect('wss://'+b+':8084/mqtt', {
+    clientId: 'pzem_'+Math.random().toString(16).slice(2,8),
+    clean:true, connectTimeout:8000, reconnectPeriod:5000
+  });
+  mqttClient.on('connect', () => {
+    setOnline(true);
+    log('เชื่อมต่อสำเร็จ ✓', 'ok');
+    DEVS.forEach(d => mqttClient.subscribe(d.topic, {qos:0},
+      e => { if(!e) log('sub: '+d.topic,'ok'); }));
+  });
+  mqttClient.on('message', onMessage);
+  mqttClient.on('error',   e => { setOnline(false); log('Error: '+e.message,'er'); });
+  mqttClient.on('close',   () => { setOnline(false); log('ตัดการเชื่อมต่อ'); });
+}
+
+function doDisconnect() {
+  if (mqttClient) { mqttClient.end(true); mqttClient=null; }
+  setOnline(false);
+}
+
+// ════════════════════════════════════════════════
+//  LOG
+// ════════════════════════════════════════════════
+function log(msg, t='') {
+  const el = document.getElementById('logBox');
+  const d  = document.createElement('div');
+  d.className = 'le '+t;
+  d.textContent = '['+new Date().toLocaleTimeString('th-TH')+'] '+msg;
+  el.appendChild(d);
+  if (el.children.length>80) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════
+buildCards();
+initSQL();
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('th-TH');
+}, 1000);
+// รีเฟรชตาราง SQLite ทุก 15 วิ
+setInterval(qRefresh, 15000);
+</script>
+</body>
+</html>
